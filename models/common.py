@@ -162,52 +162,88 @@ class TransformerBlock(nn.Module):
         p = x.flatten(2).permute(2, 0, 1)
         return self.tr(p + self.linear(p)).permute(1, 2, 0).reshape(b, self.c2, w, h)
 
+def fuse_conv_bn(conv, bn):
+    """ 融合卷积层和 BN 层 (式 3.5) """
+    std = (bn.running_var + bn.eps).sqrt()
+    bias = bn.bias - bn.weight * bn.running_mean / std
+    t = (bn.weight / std).reshape(-1, 1, 1, 1)
+    return conv.weight * t, bias
 
-class Bottleneck(nn.Module):
-    """A bottleneck layer with optional shortcut and group convolution for efficient feature extraction."""
-
-    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):
-        """Initializes a standard bottleneck layer with optional shortcut and group convolution, supporting channel
-        expansion.
-        """
+class RepBlock(nn.Module):
+    def __init__(self, c1, c2, s=1, p=None, g=1, deploy=False):
         super().__init__()
-        c_ = int(c2 * e)  # hidden channels
+        self.deploy = deploy
+        if deploy:
+            self.rbr_reparam = nn.Conv2d(c1, c2, 3, s, p=1, groups=g, bias=True)
+        else:
+            # 3x3 主分支 + BN
+            self.rbr_dense = nn.Sequential(
+                nn.Conv2d(c1, c2, 3, s, p=1, groups=g, bias=False),
+                nn.BatchNorm2d(c2)
+            )
+            # 1x1 旁路分支 + BN (图 3.6 红色实线)
+            self.rbr_1x1 = nn.Sequential(
+                nn.Conv2d(c1, c2, 1, s, p=0, groups=g, bias=False),
+                nn.BatchNorm2d(c2)
+            )
+
+    def forward(self, x):
+        if self.deploy:
+            return self.rbr_reparam(x)
+        return self.rbr_dense(x) + self.rbr_1x1(x)
+    
+    def switch_to_deploy(self):
+        """ 执行重参数化融合 (式 3.6) """
+        if self.deploy: return
+        kernel3, bias3 = fuse_conv_bn(self.rbr_dense[0], self.rbr_dense[1])
+        kernel1, bias1 = fuse_conv_bn(self.rbr_1x1[0], self.rbr_1x1[1])
+        # 将 1x1 卷积核 padding 成 3x3
+        kernel1 = torch.nn.functional.pad(kernel1, [1, 1, 1, 1])
+        
+        self.rbr_reparam = nn.Conv2d(self.rbr_dense[0].in_channels, 
+                                     self.rbr_dense[0].out_channels, 
+                                     3, self.rbr_dense[0].stride, p=1, bias=True)
+        self.rbr_reparam.weight.data = kernel3 + kernel1
+        self.rbr_reparam.bias.data = bias3 + bias1
+        
+        # 删除原始分支释放内存
+        for para in self.parameters(): para.detach_()
+        self.__delattr__('rbr_dense')
+        self.__delattr__('rbr_1x1')
+        self.deploy = True
+
+
+class RepBottleneck(nn.Module):
+    # 对应图 3.6(b)
+    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):
+        super().__init__()
+        c_ = int(c2 * e)
         self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c_, c2, 3, 1, g=g)
+        # 将原版的 3x3 Conv 替换为 RepBlock
+        self.cv2 = RepBlock(c_, c2, s=1, p=1, g=g)
         self.add = shortcut and c1 == c2
 
     def forward(self, x):
-        """Processes input through two convolutions, optionally adds shortcut if channel dimensions match; input is a
-        tensor.
-        """
         return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
 
-
-class BottleneckCSP(nn.Module):
-    """CSP bottleneck layer for feature extraction with cross-stage partial connections and optional shortcuts."""
-
+class CSPRepBottleneck(nn.Module):
+    # 对应图 3.6(d)
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
-        """Initializes CSP bottleneck with optional shortcuts; args: ch_in, ch_out, number of repeats, shortcut bool,
-        groups, expansion.
-        """
         super().__init__()
-        c_ = int(c2 * e)  # hidden channels
+        c_ = int(c2 * e)
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = nn.Conv2d(c1, c_, 1, 1, bias=False)
         self.cv3 = nn.Conv2d(c_, c_, 1, 1, bias=False)
         self.cv4 = Conv(2 * c_, c2, 1, 1)
-        self.bn = nn.BatchNorm2d(2 * c_)  # applied to cat(cv2, cv3)
+        self.bn = nn.BatchNorm2d(2 * c_)
         self.act = nn.SiLU()
-        self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
+        # 核心修改：使用 RepBottleneck
+        self.m = nn.Sequential(*(RepBottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
 
     def forward(self, x):
-        """Performs forward pass by applying layers, activation, and concatenation on input x, returning feature-
-        enhanced output.
-        """
         y1 = self.cv3(self.m(self.cv1(x)))
         y2 = self.cv2(x)
         return self.cv4(self.act(self.bn(torch.cat((y1, y2), 1))))
-
 
 class CrossConv(nn.Module):
     """Implements a cross convolution layer with downsampling, expansion, and optional shortcut."""
