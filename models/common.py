@@ -212,6 +212,50 @@ class RepBlock(nn.Module):
         self.__delattr__('rbr_1x1')
         self.deploy = True
 
+class Bottleneck(nn.Module):
+    """A bottleneck layer with optional shortcut and group convolution for efficient feature extraction."""
+
+    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):
+        """Initializes a standard bottleneck layer with optional shortcut and group convolution, supporting channel
+        expansion.
+        """
+        super().__init__()
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c_, c2, 3, 1, g=g)
+        self.add = shortcut and c1 == c2
+
+    def forward(self, x):
+        """Processes input through two convolutions, optionally adds shortcut if channel dimensions match; input is a
+        tensor.
+        """
+        return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
+
+
+class BottleneckCSP(nn.Module):
+    """CSP bottleneck layer for feature extraction with cross-stage partial connections and optional shortcuts."""
+
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
+        """Initializes CSP bottleneck with optional shortcuts; args: ch_in, ch_out, number of repeats, shortcut bool,
+        groups, expansion.
+        """
+        super().__init__()
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = nn.Conv2d(c1, c_, 1, 1, bias=False)
+        self.cv3 = nn.Conv2d(c_, c_, 1, 1, bias=False)
+        self.cv4 = Conv(2 * c_, c2, 1, 1)
+        self.bn = nn.BatchNorm2d(2 * c_)  # applied to cat(cv2, cv3)
+        self.act = nn.SiLU()
+        self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
+
+    def forward(self, x):
+        """Performs forward pass by applying layers, activation, and concatenation on input x, returning feature-
+        enhanced output.
+        """
+        y1 = self.cv3(self.m(self.cv1(x)))
+        y2 = self.cv2(x)
+        return self.cv4(self.act(self.bn(torch.cat((y1, y2), 1))))
 
 class RepBottleneck(nn.Module):
     # 对应图 3.6(b)
