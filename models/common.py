@@ -22,6 +22,10 @@ import torch.nn as nn
 from PIL import Image
 from torch.cuda import amp
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 # Import 'ultralytics' package or install if missing
 try:
     import ultralytics
@@ -1109,3 +1113,49 @@ class Classify(nn.Module):
         if isinstance(x, list):
             x = torch.cat(x, 1)
         return self.linear(self.drop(self.pool(self.conv(x)).flatten(1)))
+
+
+class GCAM(nn.Module):
+    """Global Context Attention Module (GCAM) for RTOD-YOLO"""
+    def __init__(self, c1, r=16):
+        super(GCAM, self).__init__()
+        self.inter_channels = max(c1 // r, 1)
+        
+        # --- 1. Global Context Block (空间长距离依赖) ---
+        self.conv_mask = nn.Conv2d(c1, 1, kernel_size=1)
+        self.softmax = nn.Softmax(dim=2)
+        
+        self.channel_add_conv = nn.Sequential(
+            nn.Conv2d(c1, self.inter_channels, kernel_size=1),
+            nn.LayerNorm([self.inter_channels, 1, 1]),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(self.inter_channels, c1, kernel_size=1)
+        )
+        
+        # --- 2. Channel Attention Module (通道依赖) ---
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.conv_wk = nn.Conv2d(c1, c1, kernel_size=1) # psi_k
+        self.conv_wq = nn.Conv2d(c1, c1, kernel_size=1) # psi_q
+
+    def forward(self, x):
+        b, c, h, w = x.size()
+        
+        # Global Context 流程
+        input_x = x.view(b, c, h * w)               # [B, C, HW]
+        mask = self.conv_mask(x).view(b, 1, h * w)  # [B, 1, HW]
+        mask = self.softmax(mask).permute(0, 2, 1)  # [B, HW, 1]
+        
+        context = torch.matmul(input_x, mask)       # [B, C, 1]
+        context = context.view(b, c, 1, 1)
+        u = x + self.channel_add_conv(context)      # 得到 U_l
+        
+        # Channel Attention 流程
+        pool_u = self.avg_pool(u)
+        k = self.conv_wk(pool_u).view(b, c, 1)
+        q = self.conv_wq(pool_u).view(b, 1, c)
+        
+        s = torch.matmul(k, q)                      # [B, C, C] 权重 S
+        s = F.softmax(s, dim=-1)
+        
+        z = torch.matmul(s, u.view(b, c, h * w))    # 矩阵乘法融合
+        return z.view(b, c, h, w)
