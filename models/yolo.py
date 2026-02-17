@@ -422,6 +422,7 @@ def parse_model(d, ch):
             DWConvTranspose2d,
             C3x,
             GCAM,
+            CSPRepBottleneck, SDPH_Block
         }:
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
