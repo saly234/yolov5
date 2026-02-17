@@ -225,12 +225,7 @@ class Bottleneck(nn.Module):
 
 
 class BottleneckCSP(nn.Module):
-    """CSP bottleneck layer for feature extraction with cross-stage partial connections and optional shortcuts."""
-
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
-        """Initializes CSP bottleneck with optional shortcuts; args: ch_in, ch_out, number of repeats, shortcut bool,
-        groups, expansion.
-        """
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
