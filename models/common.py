@@ -1159,3 +1159,54 @@ class GCAM(nn.Module):
         
         z = torch.matmul(s, u.view(b, c, h * w))    # 矩阵乘法融合
         return z.view(b, c, h, w)
+
+
+class ChannelShift(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.split_channels = channels // 2
+        self.q = self.split_channels // 4  # 每个方向移动的通道数
+
+    def forward(self, x):
+        b, c, h, w = x.size()
+        out = x.clone()
+        q = self.q
+        # 向上、下、左、右各平移 1 像素
+        out[:, 0:q, :-1, :] = x[:, 0:q, 1:, :]
+        out[:, q:2*q, 1:, :] = x[:, q:2*q, :-1, :]
+        out[:, 2*q:3*q, :, :-1] = x[:, 2*q:3*q, :, 1:]
+        out[:, 3*q:4*q, :, 1:] = x[:, 3*q:4*q, :, :-1]
+        return out
+
+class SDPH_Block(nn.Module):
+    def __init__(self, ch_in, n_anchors, n_classes):
+        super().__init__()
+        mid_ch = ch_in // 2
+        self.reduce = nn.Conv2d(ch_in, mid_ch, 1)
+        self.shift = ChannelShift(mid_ch)
+
+        # 分类分支：2个3x3卷积 + 1个1x1卷积
+        self.cls_branch = nn.Sequential(
+            nn.Conv2d(mid_ch, mid_ch, 3, padding=1),
+            nn.Conv2d(mid_ch, mid_ch, 3, padding=1),
+            self.shift,
+            nn.Conv2d(mid_ch, n_anchors * n_classes, 1)
+        )
+
+        # 回归分支：2个1x1卷积 + 2个独立输出(Conf + Box)
+        self.reg_conv = nn.Sequential(
+            nn.Conv2d(mid_ch, mid_ch, 1),
+            nn.Conv2d(mid_ch, mid_ch, 1)
+        )
+        self.reg_conf = nn.Conv2d(mid_ch, n_anchors * 1, 1)
+        self.reg_box = nn.Conv2d(mid_ch, n_anchors * 4, 1)
+
+    def forward(self, x):
+        x = self.shift(self.reduce(x))
+        cls_out = self.cls_branch(x)
+        reg_feat = self.reg_conv(x)
+        conf_out = self.reg_conf(reg_feat)
+        box_out = self.reg_box(reg_feat)
+        # 拼接顺序：[box(4), conf(1), cls(nc)]
+        return torch.cat([box_out, conf_out, cls_out], dim=1)
+
