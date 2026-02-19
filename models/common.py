@@ -1248,26 +1248,23 @@ class ChannelShift(nn.Module):
         return out
 
 class SDPH_Block(nn.Module):
-    # 修改参数顺序：nc, anchors, ch (输入通道列表)
     def __init__(self, nc=80, anchors=(), ch=(), multiplier=0.5): 
         super().__init__()
-        self.nc = nc  # number of classes
-        self.nl = len(anchors)  # number of detection layers (4)
-        self.na = len(anchors[0]) // 2  # number of anchors per layer (3)
-        
-        # 这里的 ch 是一个列表 [128, 256, 512, 1024]
-        # 我们需要为每一个尺度创建一个解耦头分支
+        self.nc = nc  # 类别数
+        self.nl = len(anchors)  # 探测层数 (4层: P2, P3, P4, P5)
+        self.na = len(anchors[0]) // 2  # 每层锚框数 (3个)
+        self.stride = torch.zeros(self.nl)  # <--- 必须有这一行，初始设为 0
+
         self.m = nn.ModuleList() 
         for x in ch:
-            # 这里的逻辑对应你之前的解耦结构
             mid_ch = int(x * multiplier)
             self.m.append(SDPH_SubBlock(x, mid_ch, self.na, self.nc))
 
     def forward(self, x):
-        # x 是一个列表，包含 4 个特征图 [P2, P3, P4, P5]
         for i in range(self.nl):
             x[i] = self.m[i](x[i])
         return x
+
 
 # 提取子模块方便管理
 class SDPH_SubBlock(nn.Module):
