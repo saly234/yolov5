@@ -51,6 +51,7 @@ from models.common import (
     GCAM,
     CSPRepBottleneck, 
     SDPH_Block,
+    RepBlock,
 )
 from models.experimental import MixConv2d
 from utils.autoanchor import check_anchor_order
@@ -425,7 +426,9 @@ def parse_model(d, ch):
             DWConvTranspose2d,
             C3x,
             GCAM,
-            CSPRepBottleneck, SDPH_Block
+            CSPRepBottleneck, 
+            SDPH_Block,
+            RepBlock
         }:
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
