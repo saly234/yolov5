@@ -427,7 +427,6 @@ def parse_model(d, ch):
             C3x,
             GCAM,
             CSPRepBottleneck, 
-            SDPH_Block,
             RepBlock
         }:
             c1, c2 = ch[f], args[0]
