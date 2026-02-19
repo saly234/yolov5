@@ -174,16 +174,16 @@ class RepBlock(nn.Module):
         super().__init__()
         self.deploy = deploy
         if deploy:
-            self.rbr_reparam = nn.Conv2d(c1, c2, 3, s, p=1, groups=g, bias=True)
+            self.rbr_reparam = nn.Conv2d(c1, c2, 3, s, padding=1, groups=g, bias=True)
         else:
             # 3x3 主分支 + BN
             self.rbr_dense = nn.Sequential(
-                nn.Conv2d(c1, c2, 3, s, p=1, groups=g, bias=False),
+                nn.Conv2d(c1, c2, 3, s, padding=1, groups=g, bias=False),
                 nn.BatchNorm2d(c2)
             )
             # 1x1 旁路分支 + BN (图 3.6 红色实线)
             self.rbr_1x1 = nn.Sequential(
-                nn.Conv2d(c1, c2, 1, s, p=0, groups=g, bias=False),
+                nn.Conv2d(c1, c2, 1, s, padding=0, groups=g, bias=False),
                 nn.BatchNorm2d(c2)
             )
 
