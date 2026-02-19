@@ -1266,7 +1266,6 @@ class SDPH_Block(nn.Module):
             mid_ch = int(x * multiplier)
             self.m.append(SDPH_SubBlock(x, mid_ch, self.na, self.nc))
 
-    @staticmethod
     def _make_grid(self, nx=20, ny=20, i=0):
         d = self.anchors[i].device
         t = self.anchors[i].dtype
