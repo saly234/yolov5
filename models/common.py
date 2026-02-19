@@ -512,15 +512,17 @@ class Expand(nn.Module):
 
 
 class Concat(nn.Module):
-    """Concatenates tensors along a specified dimension for efficient tensor manipulation in neural networks."""
-
     def __init__(self, dimension=1):
-        """Initializes a Concat module to concatenate tensors along a specified dimension."""
         super().__init__()
         self.d = dimension
 
     def forward(self, x):
-        """Concatenates a list of tensors along a specified dims; `x` is a list of tensors, `dimension` is an int."""
+        # x 是待合并的特征图列表 [tensor1, tensor2]
+        # 如果尺寸不一致，以第一个 tensor 为准，对其他的进行插值对齐
+        shape0 = x[0].shape[2:]
+        for i in range(1, len(x)):
+            if x[i].shape[2:] != shape0:
+                x[i] = F.interpolate(x[i], size=shape0, mode='nearest')
         return torch.cat(x, self.d)
 
 
