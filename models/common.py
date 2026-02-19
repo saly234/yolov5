@@ -1256,6 +1256,7 @@ class SDPH_Block(nn.Module):
         self.nl = len(anchors)  # 探测层数 (4层: P2, P3, P4, P5)
         self.na = len(anchors[0]) // 2  # 每层锚框数 (3个)
         self.stride = torch.zeros(self.nl)  # <--- 必须有这一行，初始设为 0
+        self.grid = [torch.empty(0) for _ in range(self.nl)]
         a = torch.tensor(anchors).float().view(self.nl, -1, 2)
         self.register_buffer('anchors', a)
 
@@ -1264,10 +1265,21 @@ class SDPH_Block(nn.Module):
             mid_ch = int(x * multiplier)
             self.m.append(SDPH_SubBlock(x, mid_ch, self.na, self.nc))
 
+    @staticmethod
+    def _make_grid(nx=20, ny=20, i=0, torch_1_10=True):
+        d = torch.device('cpu') # 默认，后续由 _apply 搬运
+        if torch_1_10:  # torch>=1.10.0 meshgrid compatibility
+            yv, xv = torch.meshgrid([torch.arange(ny, device=d), torch.arange(nx, device=d)], indexing='ij')
+        else:
+            yv, xv = torch.meshgrid([torch.arange(ny, device=d), torch.arange(nx, device=d)])
+        return torch.stack((xv, yv), 2).expand(1, 1, ny, nx, 2).float()
+    
     def forward(self, x):
         for i in range(self.nl):
             x[i] = self.m[i](x[i])
         return x
+
+
 
 
 # 提取子模块方便管理
