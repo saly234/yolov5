@@ -318,20 +318,33 @@ class DetectionModel(BaseModel):
         y[-1] = y[-1][:, i:]  # small
         return y
 
-    def _initialize_biases(self, cf=None):
-        """Initializes biases for YOLOv5's Detect() module, optionally using class frequencies (cf).
-
-        For details see https://arxiv.org/abs/1708.02002 section 3.3.
-        """
-        # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1.
+    def _initialize_biases(self, cf=None):  # initialize biases into Detect(), cf is class frequency
         m = self.model[-1]  # Detect() module
-        for mi, s in zip(m.m, m.stride):  # from
-            b = mi.bias.view(m.na, -1)  # conv.bias(255) to (3,85)
-            b.data[:, 4] += math.log(8 / (640 / s) ** 2)  # obj (8 objects per 640 image)
-            b.data[:, 5 : 5 + m.nc] += (
-                math.log(0.6 / (m.nc - 0.99999)) if cf is None else torch.log(cf / cf.sum())
-            )  # cls
-            mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
+        for mi, s in zip(m.m, m.stride):  # zip(SDPH_SubBlock list, strides)
+            
+            # --- 核心修改开始 ---
+            if isinstance(m, SDPH_Block):
+                # 针对 SDPH 结构，分别初始化分类、置信度、框回归的 bias
+                # 这里的 mi 对应的是你的 SDPH_SubBlock
+                # 1. 初始化分类分支最后一层的 bias
+                b_cls = mi.cls_branch[-1].bias.view(m.na, -1)
+                b_cls.data += math.log(0.6 / (m.nc - 0.999999))
+                mi.cls_branch[-1].bias = torch.nn.Parameter(b_cls.view(-1), requires_grad=True)
+                
+                # 2. 初始化置信度分支 bias
+                b_conf = mi.reg_conf.bias.view(m.na, -1)
+                b_conf.data += math.log(8 / (640 / s) ** 2)
+                mi.reg_conf.bias = torch.nn.Parameter(b_conf.view(-1), requires_grad=True)
+                
+                # 3. 初始化框回归分支（通常保持默认或轻微偏移）
+                # mi.reg_box.bias.data += ... (可选)
+            # --- 核心修改结束 ---
+
+            else:  # 官方 Detect 或 Segment 逻辑
+                b = mi.bias.view(m.na, -1)  # conv.bias(255) to (3,85)
+                b.data += math.log(8 / (640 / s) ** 2)  # obj (8 objects per 640 image)
+                b.data += math.log(0.6 / (m.nc - 0.999999)) if cf is None else torch.log(cf / cf.sum())  # cls
+                mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
 
 
 Model = DetectionModel  # retain YOLOv5 'Model' class for backwards compatibility
