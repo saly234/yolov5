@@ -443,12 +443,13 @@ def parse_model(d, ch):
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
         # TODO: channel, gw, gd
-        elif m in {Detect, Segment}:
+        elif m in {Detect, Segment,SDPH_Block}:
             args.append([ch[x] for x in f])
             if isinstance(args[1], int):  # number of anchors
                 args[1] = [list(range(args[1] * 2))] * len(f)
             if m is Segment:
                 args[3] = make_divisible(args[3] * gw, ch_mul)
+            c2 = None # 检测头没有输出通道，它是网络的终点
         elif m is Contract:
             c2 = ch[f] * args[0] ** 2
         elif m is Expand:
