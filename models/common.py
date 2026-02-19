@@ -1267,13 +1267,16 @@ class SDPH_Block(nn.Module):
             self.m.append(SDPH_SubBlock(x, mid_ch, self.na, self.nc))
 
     @staticmethod
-    def _make_grid(nx=20, ny=20, i=0, torch_1_10=True):
-        d = torch.device('cpu') # 默认，后续由 _apply 搬运
-        if torch_1_10:  # torch>=1.10.0 meshgrid compatibility
-            yv, xv = torch.meshgrid([torch.arange(ny, device=d), torch.arange(nx, device=d)], indexing='ij')
-        else:
-            yv, xv = torch.meshgrid([torch.arange(ny, device=d), torch.arange(nx, device=d)])
-        return torch.stack((xv, yv), 2).expand(1, 1, ny, nx, 2).float()
+    def _make_grid(self, nx=20, ny=20, i=0):
+        d = self.anchors[i].device
+        t = self.anchors[i].dtype
+        shape = 1, self.na, ny, nx, 2  # grid shape
+        yv, xv = torch.meshgrid(torch.arange(ny, device=d, dtype=t), torch.arange(nx, device=d, dtype=t), indexing='ij')
+        grid = torch.stack((xv, yv), 2).expand(shape) - 0.5  # add grid offset, 2026 torch compat
+        
+        # 核心：计算 anchor_grid 并返回两个值
+        anchor_grid = (self.anchors[i] * self.stride[i]).view((1, self.na, 1, 1, 2)).expand(shape)
+        return grid, anchor_grid # <--- 必须返回两个值
     
     def forward(self, x):
         z = []  # 推理结果缓存
@@ -1291,8 +1294,9 @@ class SDPH_Block(nn.Module):
 
                 y = x[i].sigmoid()
                 # 坐标还原逻辑（基于 grid 和 anchor_grid）
-                y[..., 0:2] = (y[..., 0:2] * 2 + self.grid[i]) * self.stride[i]  # xy
-                y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
+                y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + self.grid[i]) * self.stride[i]
+                # 对应 YOLOv5 官方公式：wh = (σ(wh)*2)^2 * anchor_grid
+                y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]
                 z.append(y.view(bs, -1, self.nc + 5))
 
         return x if self.training else (torch.cat(z, 1), x)
