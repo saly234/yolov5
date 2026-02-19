@@ -1257,6 +1257,7 @@ class SDPH_Block(nn.Module):
         self.na = len(anchors[0]) // 2  # 每层锚框数 (3个)
         self.stride = torch.zeros(self.nl)  # <--- 必须有这一行，初始设为 0
         self.grid = [torch.empty(0) for _ in range(self.nl)]
+        self.anchor_grid = [torch.empty(0) for _ in range(self.nl)]
         a = torch.tensor(anchors).float().view(self.nl, -1, 2)
         self.register_buffer('anchors', a)
 
