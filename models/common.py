@@ -1256,6 +1256,8 @@ class SDPH_Block(nn.Module):
         self.nl = len(anchors)  # 探测层数 (4层: P2, P3, P4, P5)
         self.na = len(anchors[0]) // 2  # 每层锚框数 (3个)
         self.stride = torch.zeros(self.nl)  # <--- 必须有这一行，初始设为 0
+        a = torch.tensor(anchors).float().view(self.nl, -1, 2)
+        self.register_buffer('anchors', a)
 
         self.m = nn.ModuleList() 
         for x in ch:
