@@ -176,12 +176,10 @@ class RepBlock(nn.Module):
         if deploy:
             self.rbr_reparam = nn.Conv2d(c1, c2, 3, s, padding=1, groups=g, bias=True)
         else:
-            # 3x3 主分支 + BN
             self.rbr_dense = nn.Sequential(
                 nn.Conv2d(c1, c2, 3, s, padding=1, groups=g, bias=False),
                 nn.BatchNorm2d(c2)
             )
-            # 1x1 旁路分支 + BN (图 3.6 红色实线)
             self.rbr_1x1 = nn.Sequential(
                 nn.Conv2d(c1, c2, 1, s, padding=0, groups=g, bias=False),
                 nn.BatchNorm2d(c2)
@@ -193,20 +191,24 @@ class RepBlock(nn.Module):
         return self.rbr_dense(x) + self.rbr_1x1(x)
     
     def switch_to_deploy(self):
-        """ 执行重参数化融合 (式 3.6) """
+        """ 执行重参数化融合 """
         if self.deploy: return
+        # 确保你在 utils/torch_utils.py 导入了 fuse_conv_and_bn
+        from utils.torch_utils import fuse_conv_and_bn as fuse_conv_bn
+        
         kernel3, bias3 = fuse_conv_bn(self.rbr_dense[0], self.rbr_dense[1])
         kernel1, bias1 = fuse_conv_bn(self.rbr_1x1[0], self.rbr_1x1[1])
+        
         # 将 1x1 卷积核 padding 成 3x3
         kernel1 = torch.nn.functional.pad(kernel1, [1, 1, 1, 1])
         
         self.rbr_reparam = nn.Conv2d(self.rbr_dense[0].in_channels, 
                                      self.rbr_dense[0].out_channels, 
-                                     3, self.rbr_dense[0].stride, p=1, bias=True)
+                                     3, self.rbr_dense[0].stride, padding=1, bias=True) # 这里修正了 p=1
         self.rbr_reparam.weight.data = kernel3 + kernel1
         self.rbr_reparam.bias.data = bias3 + bias1
         
-        # 删除原始分支释放内存
+        # 清理内存
         for para in self.parameters(): para.detach_()
         self.__delattr__('rbr_dense')
         self.__delattr__('rbr_1x1')
