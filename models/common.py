@@ -1276,9 +1276,26 @@ class SDPH_Block(nn.Module):
         return torch.stack((xv, yv), 2).expand(1, 1, ny, nx, 2).float()
     
     def forward(self, x):
+        z = []  # 推理结果缓存
         for i in range(self.nl):
-            x[i] = self.m[i](x[i])
-        return x
+            x[i] = self.m[i](x[i])  # 得到 [bs, na*(5+nc), h, w]
+            
+            # --- 关键的维度转换 ---
+            bs, _, ny, nx = x[i].shape  
+            # 重排维度: [bs, na, 5+nc, ny, nx] -> [bs, na, ny, nx, 5+nc]
+            x[i] = x[i].view(bs, self.na, self.nc + 5, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+
+            if not self.training:  # 如果是推理模式，需要构造推理输出
+                if self.grid[i].shape[2:4] != x[i].shape[2:4]:
+                    self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
+
+                y = x[i].sigmoid()
+                # 坐标还原逻辑（基于 grid 和 anchor_grid）
+                y[..., 0:2] = (y[..., 0:2] * 2 + self.grid[i]) * self.stride[i]  # xy
+                y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
+                z.append(y.view(bs, -1, self.nc + 5))
+
+        return x if self.training else (torch.cat(z, 1), x)
 
 
 
