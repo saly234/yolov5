@@ -1,86 +1,66 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
-# Parameters
-nc: 80 # number of classes
-depth_multiple: 0.33 # model depth multiple
-width_multiple: 0.50 # layer channel multiple
+# RTOD-YOLO for VisDrone Dataset
+nc: 10  # VisDrone classes
+depth_multiple: 0.33
+width_multiple: 0.50
+
+# 针对 4 个尺度的检测头配置锚框
 anchors:
   - [5,6, 8,14, 15,11]      # P2/4 (微小目标)
-  - [10,13, 16,30, 33,23]   # P3/8
-  - [30,61, 62,45, 59,119]  # P4/16
-  - [116,90, 156,198, 373,326] # P5/32
+  - [10,13, 16,30, 33,23]   # P3/8 (小目标)
+  - [30,61, 62,45, 59,119]  # P4/16 (中目标)
+  - [116,90, 156,198, 373,326] # P5/32 (大目标)
 
-# YOLOv5 v6.0 backbon
+# --- Backbone (使用 CSPRepBottleneck 和 RepBlock) ---
 backbone:
-  # [from, number, module, args]
   [
-    [-1, 1, Conv, [64, 6, 2, 2]], # 0-P1/2
-    [-1, 1, Conv, [128, 3, 2]], # 1-P2/4
-    [-1, 3, CSPRepBottleneck, [128]],
-    [-1, 1, Conv, [256, 3, 2]], # 3-P3/8
-    [-1, 6, CSPRepBottleneck, [256]],
-    [-1, 1, Conv, [512, 3, 2]], # 5-P4/16
-    [-1, 9, CSPRepBottleneck, [512]],
-    [-1, 1, Conv, [1024, 3, 2]], # 7-P5/32
-    [-1, 3, CSPRepBottleneck, [1024]],
-    [-1, 1, SPPF, [1024, 5]], # 9
+    [-1, 1, RepBlock, [64, 3, 2]],      # 0-P1/2
+    [-1, 1, RepBlock, [128, 3, 2]],     # 1-P2/4
+    [-1, 3, CSPRepBottleneck, [128]],   # 2
+    [-1, 1, RepBlock, [256, 3, 2]],     # 3-P3/8
+    [-1, 6, CSPRepBottleneck, [256]],   # 4
+    [-1, 1, RepBlock, [512, 3, 2]],     # 5-P4/16
+    [-1, 9, CSPRepBottleneck, [512]],   # 6
+    [-1, 1, RepBlock, [1024, 3, 2]],    # 7-P5/32
+    [-1, 3, CSPRepBottleneck, [1024]],  # 8
+    [-1, 1, SPPF, [1024, 5]],           # 9
   ]
 
-neck:
-  [[-1, 1, Conv, [512, 1, 1]],
-   [-1, 1, nn.Upsample, [None, 2, 'nearest']],
-   [[-1, 6], 1, Concat, [1]],  # cat backbone P4
-   [-1, 3, C3, [512, False]],  # 13
+# --- Neck (特征融合 + GCAM 注意力机制) ---
+head:
+  [
+    [-1, 1, Conv, [512, 1, 1]],         # 10
+    [-1, 1, nn.Upsample, [None, 2, 'nearest']], # 11
+    [[-1, 6], 1, Concat, [1]],          # 12 cat backbone P4
+    [-1, 3, C3, [512, False]],          # 13
 
-   [-1, 1, Conv, [256, 1, 1]],
-   [-1, 1, nn.Upsample, [None, 2, 'nearest']],
-   [[-1, 4], 1, Concat, [1]],  # cat backbone P3
-   [-1, 3, C3, [256, False]],  # 17 (P3 size)
+    [-1, 1, Conv, [256, 1, 1]],         # 14
+    [-1, 1, nn.Upsample, [None, 2, 'nearest']], # 15
+    [[-1, 4], 1, Concat, [1]],          # 16 cat backbone P3
+    [-1, 3, C3, [256, False]],          # 17 (P3 size)
 
-   # --- 增加 P2 层融合逻辑 ---
-   [-1, 1, Conv, [128, 1, 1]],
-   [-1, 1, nn.Upsample, [None, 2, 'nearest']],
-   [[-1, 2], 1, Concat, [1]],  # cat backbone P2
-   [-1, 3, C3, [128, False]],  # 21 (P2 size)
-   # -----------------------
+    [-1, 1, Conv, [128, 1, 1]],         # 18
+    [-1, 1, nn.Upsample, [None, 2, 'nearest']], # 19
+    [[-1, 2], 1, Concat, [1]],          # 20 cat backbone P2
+    [-1, 3, C3, [128, False]],          # 21 (P2 size - 特征提取最底层)
 
-   [-1, 1, Conv, [128, 3, 2]],
-   [[-1, 18], 1, Concat, [1]], 
-   [-1, 3, C3, [256, False]], 
-   [-1, 1, GCAM, [256]],  # 25
+    # 自底向上融合 + GCAM 模块集成
+    [-1, 1, Conv, [128, 3, 2]],         # 22
+    [[-1, 18], 1, Concat, [1]],         # 23 cat head P3
+    [-1, 3, C3, [256, False]],          # 24
+    [-1, 1, GCAM, [256]],               # 25 (P3 Attention)
 
-   [-1, 1, Conv, [256, 3, 2]],
-   [[-1, 14], 1, Concat, [1]], 
-   [-1, 3, C3, [512, False]], 
-   [-1, 1, GCAM, [512]],       # 29 (P4 with Attention)
+    [-1, 1, Conv, [256, 3, 2]],         # 26
+    [[-1, 14], 1, Concat, [1]],         # 27 cat head P4
+    [-1, 3, C3, [512, False]],          # 28
+    [-1, 1, GCAM, [512]],               # 29 (P4 Attention)
 
-   [-1, 1, Conv, [512, 3, 2]],
-   [[-1, 10], 1, Concat, [1]], 
-   [-1, 3, C3, [1024, False]], 
-   [-1, 1, GCAM, [1024]],      # 33 (P5 with Attention)
-   
-   # 在进入 Detect 之前，可以根据论文在各层末尾添加 GCAM 注意力机制
-  ]
-  
-# YOLOv5 v6.0 head
-head: [
-    [-1, 1, Conv, [512, 1, 1]],
-    [-1, 1, nn.Upsample, [None, 2, "nearest"]],
-    [[-1, 6], 1, Concat, [1]], # cat backbone P4
-    [-1, 3, C3, [512, False]], # 13
+    [-1, 1, Conv, [512, 3, 2]],         # 30
+    [[-1, 10], 1, Concat, [1]],         # 31 cat head P5
+    [-1, 3, C3, [1024, False]],         # 32
+    [-1, 1, GCAM, [1024]],              # 33 (P5 Attention)
 
-    [-1, 1, Conv, [256, 1, 1]],
-    [-1, 1, nn.Upsample, [None, 2, "nearest"]],
-    [[-1, 4], 1, Concat, [1]], # cat backbone P3
-    [-1, 3, C3, [256, False]], # 17 (P3/8-small)
-
-    [-1, 1, Conv, [256, 3, 2]],
-    [[-1, 14], 1, Concat, [1]], # cat head P4
-    [-1, 3, C3, [512, False]], # 20 (P4/16-medium)
-
-    [-1, 1, Conv, [512, 3, 2]],
-    [[-1, 10], 1, Concat, [1]], # cat head P5
-    [-1, 3, C3, [1024, False]], # 23 (P5/32-large)
-
-    [[21, 25, 29, 33], 1, Detect, [nc, anchors]], # P2, P3, P4, P5 # Detect(P3, P4, P5)
+    # --- SDPH 检测头 (4尺度解耦输出) ---
+    [[21, 25, 29, 33], 1, SDPH, [nc, anchors]], # 使用解耦头进行分类和回归
   ]
