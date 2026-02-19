@@ -1248,21 +1248,42 @@ class ChannelShift(nn.Module):
         return out
 
 class SDPH_Block(nn.Module):
-    def __init__(self, ch_in, n_anchors, n_classes):
+    # 修改参数顺序：nc, anchors, ch (输入通道列表)
+    def __init__(self, nc=80, anchors=(), ch=(), multiplier=0.5): 
         super().__init__()
-        mid_ch = ch_in // 2
+        self.nc = nc  # number of classes
+        self.nl = len(anchors)  # number of detection layers (4)
+        self.na = len(anchors[0]) // 2  # number of anchors per layer (3)
+        
+        # 这里的 ch 是一个列表 [128, 256, 512, 1024]
+        # 我们需要为每一个尺度创建一个解耦头分支
+        self.m = nn.ModuleList() 
+        for x in ch:
+            # 这里的逻辑对应你之前的解耦结构
+            mid_ch = int(x * multiplier)
+            self.m.append(SDPH_SubBlock(x, mid_ch, self.na, self.nc))
+
+    def forward(self, x):
+        # x 是一个列表，包含 4 个特征图 [P2, P3, P4, P5]
+        for i in range(self.nl):
+            x[i] = self.m[i](x[i])
+        return x
+
+# 提取子模块方便管理
+class SDPH_SubBlock(nn.Module):
+    def __init__(self, ch_in, mid_ch, n_anchors, n_classes):
+        super().__init__()
         self.reduce = nn.Conv2d(ch_in, mid_ch, 1)
         self.shift = ChannelShift(mid_ch)
-
-        # 分类分支：2个3x3卷积 + 1个1x1卷积
+        
+        # 分类分支
         self.cls_branch = nn.Sequential(
             nn.Conv2d(mid_ch, mid_ch, 3, padding=1),
             nn.Conv2d(mid_ch, mid_ch, 3, padding=1),
-            self.shift,
             nn.Conv2d(mid_ch, n_anchors * n_classes, 1)
         )
-
-        # 回归分支：2个1x1卷积 + 2个独立输出(Conf + Box)
+        
+        # 回归分支
         self.reg_conv = nn.Sequential(
             nn.Conv2d(mid_ch, mid_ch, 1),
             nn.Conv2d(mid_ch, mid_ch, 1)
@@ -1274,8 +1295,4 @@ class SDPH_Block(nn.Module):
         x = self.shift(self.reduce(x))
         cls_out = self.cls_branch(x)
         reg_feat = self.reg_conv(x)
-        conf_out = self.reg_conf(reg_feat)
-        box_out = self.reg_box(reg_feat)
-        # 拼接顺序：[box(4), conf(1), cls(nc)]
-        return torch.cat([box_out, conf_out, cls_out], dim=1)
-
+        return torch.cat([self.reg_box(reg_feat), self.reg_conf(reg_feat), cls_out], 1)
