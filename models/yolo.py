@@ -248,7 +248,7 @@ class DetectionModel(BaseModel):
 
         # Build strides, anchors
         m = self.model[-1]  # Detect()
-        if isinstance(m, (Detect, Segment)):
+        if isinstance(m, (Detect, Segment,SDPH_Block)):
 
             def _forward(x):
                 """Passes the input 'x' through the model and returns the processed output."""
